@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sk8erBoi</title>
+<script type="text/javascript" nonce="c500a59dd94e4afe85927d13acb" src="//local.adguard.org?ts=1795326459161&amp;type=content-script&amp;dmn=d7ab3ea3-4bc8-4f55-9b82-e73be588f73b.frame.claudeusercontent.com&amp;url=https%3A%2F%2Fd7ab3ea3-4bc8-4f55-9b82-e73be588f73b.frame.claudeusercontent.com%2F_f%2F1795361698-5ae6%2F_src%2Findex.html%3F__frame_t%3DKnM_hmVNeJlAXyXQ459imyyE.7cdcf352-94a0-46b8-bb07-39b337d53ca9.f6e4e7d9-0050-40b7-9e9e-bc3884df2d82.1795365304&amp;app=com.android.chrome&amp;css=3&amp;js=1&amp;rel=1&amp;rji=1&amp;sbe=1"></script><script type="text/javascript" nonce="c500a59dd94e4afe85927d13acb" src="//local.adguard.org?ts=1795326459161&amp;name=AdGuard%20Extra&amp;type=user-script"></script><link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&display=swap" rel="stylesheet">
+<style>
+  :root { --paper:#f1efe8; }
+  html,body { margin:0; height:100%; background:var(--paper); overflow:hidden; touch-action:none; -webkit-user-select:none; user-select:none; }
+  canvas { display:block; width:100%; height:100%; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let W, H, DPR;
+function resize(){
+  DPR = window.devicePixelRatio || 1;
+  W = innerWidth; H = innerHeight;
+  cv.width = W*DPR; cv.height = H*DPR;
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+addEventListener('resize', resize); resize();
+
+const INK = '#2b2b2b', FONT = '"Patrick Hand","Comic Sans MS",cursive';
+const GRAV = 1800, JUMP = 640, DUR = 0.28, MANUAL_PTS = 150;
+const TRICKS = [
+  {n:'kickflip',     p:100, c:'flip', k:'rot',    d:1},
+  {n:'heelflip',     p:120, c:'flip', k:'rot',    d:-1},
+  {n:'varial flip',  p:200, c:'flip', k:'both',   d:1},
+  {n:'shove-it',     p:120, c:'spin', k:'shove',  d:1},
+  {n:'pop shove-it', p:140, c:'spin', k:'shove',  d:1},
+  {n:'360 shove-it', p:220, c:'spin', k:'shove2', d:1}
+];
+let best = 0;
+try { best = +localStorage.getItem('stickSkaterBest') || 0; } catch(e){}
+
+let state = 'start';   // start | run | dead
+let dist, speed, y, vy, obs, nextX, deadT, angle, score, px;
+let chain, trick, grinding, rail, popups, onGnd, lastSlope, manual, manualT;
+const groundY = () => Math.round(H*0.72);
+const wob = x => Math.sin(x*0.013)*2.5 + Math.sin(x*0.051)*1;
+
+function rampAt(wx){ for(const o of obs) if(o.t==='ramp' && wx>=o.x && wx<=o.x+o.w) return o; return null; }
+function gndAt(wx){ const r = rampAt(wx); return r ? groundY() - r.h*(wx-r.x)/r.w : groundY(); }
+
+function reset(keepScore){
+  dist = 0; speed = 340; vy = 0; y = groundY(); obs = []; nextX = W*1.1; deadT = 0; angle = 0;
+  px = W < 600 ? W*0.22 : W*0.25;
+  chain = []; trick = null; grinding = false; rail = null; popups = []; onGnd = true; lastSlope = 0;
+  manual = false; manualT = 0;
+  if(!keepScore) score = 0;
+}
+function spawn(){
+  while(nextX < dist + W*1.6){
+    const r = Math.random(); let o, end;
+    if(r < 0.3) o = {t:'block', x:nextX, w:28+Math.random()*22, h:28+Math.random()*24};
+    else if(r < 0.55) o = {t:'rail', x:nextX, w:150+Math.random()*90, h:34};
+    else o = {t:'ramp', x:nextX, w:110+Math.random()*40, h:55+Math.random()*25};
+    obs.push(o); end = o.x + o.w;
+    if(o.t==='ramp' && Math.random() < 0.5){
+      const rl = {t:'rail', x:end+180, w:200, h:34}; obs.push(rl); end = rl.x + rl.w;
+    }
+    nextX = end + 330 + Math.random()*320 + speed*0.25;
+  }
+  obs = obs.filter(o => o.x + o.w > dist - 100);
+}
+function popup(s){ popups.push({s, t:0}); }
+const mult = () => chain.length + ((chain.some(c=>c.c==='flip') && chain.some(c=>c.c==='spin')) ? 1 : 0);
+const manualPts = () => Math.floor(manualT * MANUAL_PTS * Math.max(1, mult()));
+const livePts = () => (chain.length ? chain.reduce((a,c)=>a+c.p,0)*mult() : 0) + manualPts();
+function die(bounce){
+  state = 'dead'; deadT = 0; chain = []; trick = null; grinding = false; manual = false; manualT = 0;
+  if(bounce) vy = -320;
+  best = Math.max(best, Math.floor(score));
+  try { localStorage.setItem('stickSkaterBest', best); } catch(e){}
+}
+function bank(){
+  const tot = livePts();
+  if(tot > 0){
+    const names = chain.map(c=>c.n);
+    if(manualT > 0) names.push('manual ' + manualT.toFixed(1) + 's');
+    score += tot;
+    popup(names.join(' + ') + (chain.length ? '  x' + mult() : '') + '  +' + tot);
+  }
+  chain = []; trick = null; manualT = 0;
+}
+function land(){
+  if(trick && trick.t/DUR < 0.7){ popup('bailed!'); die(true); return false; }
+  bank(); return true;
+}
+function jump(kind){
+  if(state === 'start'){ reset(false); state = 'run'; return; }
+  if(state !== 'run') return;
+  if(grinding){ grinding = false; rail = null; vy = -JUMP*0.85; chain = []; trick = null; manualT = 0; return; }
+  if(onGnd){
+    vy = -JUMP - lastSlope*speed; onGnd = false;
+    if(manual){ manual = false; popup('pop out!'); }          // combo stays alive
+    else { chain = []; trick = null; manualT = 0; }
+    return;
+  }
+  if(!trick){
+    let pool = TRICKS.filter(t => t.c===kind && !chain.includes(t));
+    if(!pool.length) pool = TRICKS.filter(t => t.c===kind);
+    const def = pool[Math.floor(Math.random()*pool.length)];
+    trick = {def, t:0}; chain.push(def);
+  }
+}
+
+// ---- input (tracks held buttons so we can detect "both held") ----
+const FK = ['Space','ArrowUp','KeyZ'], SK = ['ArrowDown','KeyX','ShiftLeft','ShiftRight'];
+const keys = new Set(), ptrs = new Map(), touch = {flip:0, spin:0}, mouse = {flip:false, spin:false};
+const isFlip = () => touch.flip>0 || mouse.flip || FK.some(k=>keys.has(k));
+const isSpin = () => touch.spin>0 || mouse.spin || SK.some(k=>keys.has(k));
+const isBoth = () => isFlip() && isSpin();
+
+addEventListener('keydown', e => {
+  if(e.repeat) return;
+  const k = FK.includes(e.code) ? 'flip' : SK.includes(e.code) ? 'spin' : null;
+  if(!k) return;
+  e.preventDefault(); keys.add(e.code); jump(k);
+});
+addEventListener('keyup', e => keys.delete(e.code));
+addEventListener('blur', () => { keys.clear(); ptrs.clear(); touch.flip = touch.spin = 0; mouse.flip = mouse.spin = false; });
+
+function mouseSync(e){
+  const f = !!(e.buttons & 1), s = !!(e.buttons & 6);
+  const nf = f && !mouse.flip, ns = s && !mouse.spin;
+  mouse.flip = f; mouse.spin = s;
+  if(nf) jump('flip');
+  if(ns) jump('spin');
+}
+cv.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  if(e.pointerType === 'mouse'){ mouseSync(e); return; }
+  const k = e.clientX > W/2 ? 'spin' : 'flip';
+  ptrs.set(e.pointerId, k); touch[k]++; jump(k);
+});
+function pointerEnd(e){
+  if(e.pointerType === 'mouse'){ mouseSync(e); return; }
+  if(ptrs.has(e.pointerId)){ touch[ptrs.get(e.pointerId)]--; ptrs.delete(e.pointerId); }
+}
+addEventListener('pointerup', pointerEnd);
+addEventListener('pointercancel', pointerEnd);
+addEventListener('pointermove', e => { if(e.pointerType === 'mouse') mouseSync(e); });
+cv.addEventListener('contextmenu', e => e.preventDefault());
+
+reset(false);
+let last = performance.now();
+function loop(now){
+  const dt = Math.min((now-last)/1000, 0.033); last = now;
+  update(dt); draw();
+  requestAnimationFrame(loop);
+}
+function update(dt){
+  const gy = groundY();
+  popups.forEach(p => p.t += dt); popups = popups.filter(p => p.t < 1.3);
+  if(state === 'start'){ dist += 120*dt; return; }
+  if(state === 'run'){
+    speed = Math.min(640, speed + 4*dt);
+    dist += speed*dt; score += speed*dt/10;
+    spawn();
+    const wx = dist + px, py = y;
+    if(trick){ trick.t += dt; if(trick.t >= DUR) trick = null; }
+    if(grinding){
+      y = gy - rail.h; vy = 0; score += 150*dt;
+      if(wx > rail.x + rail.w){ grinding = false; rail = null; }
+    } else {
+      if(manual){
+        if(isBoth()) manualT += dt;
+        else { manual = false; bank(); }                        // released: bank the line
+      }
+      if(onGnd && gndAt(wx) > y + 2){ vy = -lastSlope*speed; onGnd = false; manual = false; }   // ramp launch (combo carries)
+      const wasAir = !onGnd;
+      vy += GRAV*dt; y += vy*dt;
+      if(vy >= 0){
+        for(const o of obs){
+          if(o.t==='rail' && wx >= o.x && wx <= o.x+o.w && py <= gy-o.h+4 && y >= gy-o.h){
+            if(!land()) return;
+            grinding = true; onGnd = false; rail = o; y = gy-o.h; vy = 0; popup('grind!');
+            break;
+          }
+        }
+      }
+      if(!grinding){
+        const g = gndAt(wx);
+        if(y >= g){
+          if(wasAir && vy > 0){
+            const bad = trick && trick.t/DUR < 0.7;
+            if(!bad && isBoth()){ manual = true; trick = null; popup('manual!'); }
+            else if(!land()) return;
+          }
+          y = g; vy = 0; onGnd = true;
+          const r = rampAt(wx); lastSlope = r ? r.h/r.w : 0;
+        } else onGnd = false;
+      }
+    }
+    if(state !== 'run') return;
+    for(const o of obs){
+      if(o.t==='block' && wx > o.x-10 && wx < o.x+o.w+10 && y > gy-o.h+3){ die(true); break; }
+      if(o.t==='rail' && !grinding && wx > o.x-10 && wx < o.x+6 && y > gy-o.h+6){ die(true); break; }
+    }
+  } else if(state === 'dead'){
+    deadT += dt; vy += GRAV*dt; y += vy*dt; angle += 9*dt;
+    if(y > gy){ y = gy; vy = 0; }
+    dist += speed*0.15*dt*Math.max(0,1-deadT);
+    if(deadT > 0.9){
+      const wx = dist + px;
+      const keep = obs.filter(o => o.x + o.w < wx - 60 || o.x > wx + 450);
+      const prevNext = nextX;
+      reset(true); score = 0; dist = wx - px; obs = keep; nextX = Math.max(prevNext, dist + W*1.1);
+      state = 'run';
+    }
+  }
+}
+
+function line(x1,y1,x2,y2){ ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); }
+function scribbleRect(x,y0,w,h,seed){
+  ctx.beginPath();
+  ctx.moveTo(x,y0); ctx.lineTo(x,y0-h); ctx.lineTo(x+w,y0-h+Math.sin(seed)*2); ctx.lineTo(x+w,y0);
+  ctx.stroke();
+  line(x+3,y0-h+8,x+w-4,y0-h+14); line(x+2,y0-h+18,x+w-6,y0-h+24);
+}
+function drawRail(a, gy, o){
+  const top = gy - o.h;
+  line(a,gy,a,top); line(a+o.w,gy,a+o.w,top);
+  line(a-5,gy,a+5,gy); line(a+o.w-5,gy,a+o.w+5,gy);
+  line(a-4,top,a+o.w+4,top); line(a-4,top-4,a+o.w+4,top-4);
+  const mid = a + o.w/2; line(mid,top,mid,gy);
+  line(a,gy-6,a+o.w/2,top+4);
+}
+function drawRamp(a, gy, o){
+  line(a,gy,a+o.w,gy-o.h); line(a+o.w,gy-o.h,a+o.w,gy);
+  for(let i=1;i<6;i++){ const x = a+o.w*i/6; line(x,gy-o.h*i/6+3,x-7,gy-1); }
+}
+
+function drawFigure(x, fy, air){
+  ctx.save();
+  ctx.translate(x, fy);
+  if(state==='dead'){ ctx.translate(0,-35); ctx.rotate(angle); ctx.translate(0,35); }
+  const wobble = Math.sin(performance.now()/90)*0.05;
+  const tilt = manual ? -0.3 + wobble
+    : air && !grinding ? Math.max(-0.35, Math.min(0.35, vy/1800))
+    : (onGnd && lastSlope ? -Math.atan(lastSlope) : 0);
+  ctx.save(); ctx.translate(0,-9);
+  if(manual){ ctx.translate(-14,5); ctx.rotate(tilt); ctx.translate(14,-5); } else ctx.rotate(tilt);
+  if(trick && state==='run'){
+    const p = trick.t/DUR, k = trick.def.k, d = trick.def.d;
+    if(k==='rot' || k==='both') ctx.rotate(d*p*Math.PI*2);
+    if(k==='shove' || k==='both') ctx.scale(Math.cos(p*Math.PI), 1);
+    if(k==='shove2') ctx.scale(Math.cos(p*Math.PI*2), 1);
+  }
+  line(-24,0,24,0); line(-24,0,-28,-3); line(24,0,28,-3);
+  ctx.beginPath(); ctx.arc(-14,5,3,0,6.3); ctx.stroke();
+  ctx.beginPath(); ctx.arc(14,5,3,0,6.3); ctx.stroke();
+  ctx.restore();
+  const crouch = grinding ? 6 : (air ? 8 : 0);
+  const hipY = -36 + crouch, shY = -60 + crouch*1.5;
+  line(0,hipY,-11,-10); line(0,hipY,11,-10);
+  line(0,hipY,0,shY);
+  if(state==='dead'){ line(0,shY+4,-16,shY-8); line(0,shY+4,16,shY-8); }
+  else if(manual){ const w = wobble*80; line(0,shY+4,-18,shY-2+w); line(0,shY+4,18,shY-2-w); }
+  else if(grinding){ line(0,shY+4,-18,shY+4); line(0,shY+4,18,shY+4); }
+  else if(air){ line(0,shY+4,-17,shY+12); line(0,shY+4,17,shY-2); }
+  else { line(0,shY+4,-14,shY+16); line(0,shY+4,14,shY+14); }
+  ctx.beginPath(); ctx.arc(2,shY-9,8,0,6.3); ctx.stroke();
+  if(state==='dead'){ line(0,shY-12,4,shY-8); line(4,shY-12,0,shY-8); }
+  ctx.restore();
+}
+
+function draw(){
+  const gy = groundY();
+  ctx.fillStyle = '#f1efe8'; ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle = 'rgba(120,140,170,0.12)'; ctx.lineWidth = 1;
+  for(let yy=gy%34; yy<H; yy+=34){ line(0,yy,W,yy); }
+  ctx.strokeStyle = INK; ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+  ctx.beginPath();
+  for(let s=-10; s<=W+10; s+=6){
+    const yy = gy + wob(s + dist);
+    if(s===-10) ctx.moveTo(s,yy); else ctx.lineTo(s,yy);
+  }
+  ctx.stroke();
+  for(const o of obs){
+    const a = o.x - dist;
+    if(a < -260 || a > W+20) continue;
+    if(o.t==='block') scribbleRect(a, gy, o.w, o.h, o.x);
+    if(o.t==='rail') drawRail(a, gy, o);
+    if(o.t==='ramp') drawRamp(a, gy, o);
+  }
+  drawFigure(px, y, !onGnd && !grinding);
+  if(grinding && state==='run'){
+    for(let i=0;i<4;i++){ const sx = px+8+Math.random()*16, sy = y-Math.random()*8; line(sx,sy,sx+6+Math.random()*8,sy-4-Math.random()*8); }
+  }
+
+  ctx.fillStyle = INK; ctx.textBaseline = 'top';
+  ctx.font = `26px ${FONT}`; ctx.textAlign = 'left';
+  ctx.fillText(Math.floor(score) + ' pts', 20, 16);
+  ctx.textAlign = 'right'; ctx.font = `20px ${FONT}`;
+  ctx.fillText('best ' + best, W-20, 20);
+  ctx.textAlign = 'center';
+  if((chain.length || manualT > 0) && state==='run'){
+    ctx.font = `28px ${FONT}`;
+    const names = chain.map(c=>c.n);
+    if(manualT > 0) names.push('manual');
+    ctx.fillText(names.join(' + ') + (chain.length ? '   x' + mult() : '') + ' = ' + livePts(), W/2, H*0.14);
+  }
+  for(const p of popups){
+    ctx.globalAlpha = Math.max(0, 1 - p.t/1.3);
+    ctx.font = `24px ${FONT}`;
+    ctx.fillText(p.s, Math.min(Math.max(px+60, 120), W-120), gy - 130 - p.t*40);
+  }
+  ctx.globalAlpha = 0.5; ctx.font = `17px ${FONT}`;
+  ctx.fillText('flips: left click / space / left half     spins: right click / X / right half', W/2, H-52);
+  ctx.fillText('hold both when you land = manual. release to bank it, or pop out to keep the combo going', W/2, H-30);
+  ctx.globalAlpha = 1;
+  if(state === 'start'){
+    ctx.font = `44px ${FONT}`; ctx.fillText('Sk8erBoi', W/2, H*0.14);
+    ctx.font = `22px ${FONT}`;
+    ctx.fillText('tap to ollie, tap again in the air for a trick', W/2, H*0.14+56);
+    ctx.fillText('hit ramps and ollie at the top for big air', W/2, H*0.14+86);
+    ctx.fillText('mix a flip and a spin for a bonus multiplier', W/2, H*0.14+116);
+    ctx.fillText('land on rails to grind, or hold both buttons to manual', W/2, H*0.14+146);
+    ctx.fillText('tap to start', W/2, H*0.14+186);
+  }
+  if(state === 'dead'){
+    ctx.font = `30px ${FONT}`; ctx.fillText('ouch... back at it', W/2, H*0.28);
+  }
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
