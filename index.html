@@ -110,7 +110,7 @@ function jump(kind){
   if(state !== 'run') return;
   if(grinding){ grinding = false; rail = null; vy = -JUMP*0.85; chain = []; trick = null; manualT = 0; return; }
   if(onGnd){
-    vy = -JUMP - lastSlope*speed; onGnd = false; sfx('ollie'); puff(dist+px, y, 5);
+    vy = -JUMP - lastSlope*speed; onGnd = false; sfx('ollie');
     if(manual){ manual = false; popup('pop out!'); }          // combo stays alive
     else { chain = []; trick = null; manualT = 0; }
     return;
@@ -178,7 +178,8 @@ function audioInit(){
     const f = AC.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 500;
     const g = AC.createGain(); g.gain.value = 0;
     src.connect(f); f.connect(g); g.connect(master); src.start();
-    wheel = {f, g};
+    const lfo = AC.createOscillator(), ld = AC.createGain(); lfo.frequency.value = 34; ld.gain.value = 0; lfo.connect(ld); ld.connect(g.gain); lfo.start();
+    wheel = {f, g, ld};
   }catch(e){ AC = null; }
 }
 function toggleMute(){
@@ -194,35 +195,33 @@ function tone(f1, f2, dur, type, vol, delay){
   g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t+dur);
   o.connect(g); g.connect(master); o.start(t); o.stop(t+dur+0.02);
 }
-function noise(dur, vol, type, f1, f2){
+function noise(dur, vol, type, f1, f2, delay){
   if(!AC || !NB) return;
-  const t = AC.currentTime, s = AC.createBufferSource(), f = AC.createBiquadFilter(), g = AC.createGain();
+  const t = AC.currentTime + (delay||0), s = AC.createBufferSource(), f = AC.createBiquadFilter(), g = AC.createGain();
   s.buffer = NB; f.type = type; f.frequency.setValueAtTime(f1, t);
   if(f2) f.frequency.exponentialRampToValueAtTime(f2, t+dur);
   g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t+dur);
   s.connect(f); f.connect(g); g.connect(master); s.start(t, Math.random()*0.5); s.stop(t+dur+0.02);
 }
-function sfx(n, a){
+function sfx(n){
   if(!AC) return;
-  if(n==='ollie'){ tone(220, 90, 0.09, 'sine', 0.5); noise(0.05, 0.25, 'highpass', 2500); }
-  else if(n==='trick'){ const k = Math.min(a||1, 5); tone(520+k*90, 900+k*120, 0.1, 'square', 0.12); }
-  else if(n==='land'){ tone(130, 55, 0.12, 'sine', 0.6); noise(0.08, 0.3, 'lowpass', 900); }
-  else if(n==='bank'){ const b = Math.min(1+(a||0)/400, 2); tone(660*b, 0, 0.14, 'triangle', 0.3); tone(880*b, 0, 0.16, 'triangle', 0.3, 0.08); tone(1180*b, 0, 0.22, 'triangle', 0.3, 0.16); }
+  if(n==='ollie'){ noise(0.06, 0.5, 'bandpass', 1800, 600); tone(150, 70, 0.07, 'sine', 0.35); noise(0.09, 0.12, 'highpass', 3000, 0, 0.05); }
+  else if(n==='trick'){ noise(0.04, 0.35, 'bandpass', 2200); noise(0.05, 0.3, 'bandpass', 1500, 0, 0.11); }
+  else if(n==='land'){ tone(110, 50, 0.1, 'sine', 0.5); noise(0.1, 0.35, 'lowpass', 1200); noise(0.07, 0.15, 'highpass', 3000, 0, 0.03); }
+  else if(n==='grindon'){ noise(0.07, 0.45, 'bandpass', 2500, 900); tone(120, 60, 0.09, 'sine', 0.35); }
   else if(n==='crash'){ noise(0.35, 0.7, 'lowpass', 1800, 150); tone(160, 40, 0.3, 'sawtooth', 0.3); }
-  else if(n==='whoosh'){ noise(0.35, 0.35, 'bandpass', 500, 3000); }
-  else if(n==='manual'){ tone(330, 440, 0.12, 'triangle', 0.25); }
-  else if(n==='respawn'){ tone(300, 700, 0.18, 'square', 0.1); }
 }
 function voice(){      // continuous wheel / grind sound
   if(!AC || !wheel) return;
   let m = [500, 0];
   if(state === 'run'){
-    if(grinding) m = [3200, 0.16];
+    if(grinding) m = [2600, 0.13];
     else if(manual) m = [800, 0.07];
     else if(onGnd) m = [450, 0.05];
   }
   wheel.f.frequency.setTargetAtTime(m[0], AC.currentTime, 0.05);
   wheel.g.gain.setTargetAtTime(m[1], AC.currentTime, 0.05);
+  wheel.ld.gain.setTargetAtTime((state === 'run' && grinding) ? 0.09 : 0, AC.currentTime, 0.05);
 }
 
 // ---- particles + screen shake ----
@@ -285,7 +284,7 @@ function update(dt){
         for(const o of obs){
           if(o.t==='rail' && wx >= o.x && wx <= o.x+o.w && py <= gy-o.h+4 && y >= gy-o.h){
             if(!land()) return;
-            grinding = true; onGnd = false; rail = o; y = gy-o.h; vy = 0; popup('grind!'); sfx('land'); shake = Math.max(shake, 3);
+            grinding = true; onGnd = false; rail = o; y = gy-o.h; vy = 0; popup('grind!'); sfx('grindon'); shake = Math.max(shake, 3);
             break;
           }
         }
@@ -294,7 +293,7 @@ function update(dt){
         const g = gndAt(wx);
         if(y >= g){
           if(wasAir && vy > 0){
-            sfx('land'); puff(wx, g, 6);
+            sfx('land'); if(vy > 650) puff(wx, g, 2);
             const bad = trick && trick.t/DUR < 0.7;
             if(!bad && isBoth()){ manual = true; trick = null; popup('manual!'); sfx('manual'); }
             else if(!land()) return;
@@ -427,7 +426,7 @@ function draw(){
   ctx.stroke();
   for(const o of obs){
     const a = o.x - dist;
-    if(a < -260 || a > W+20) continue;
+    if(a + o.w < -60 || a > W+20) continue;
     if(o.t==='block') scribbleRect(a, gy, o.w, o.h, o.x);
     if(o.t==='rail') (o.bench ? drawBench : drawRail)(a, gy, o);
     if(o.t==='cone') drawCones(a, gy, o);
