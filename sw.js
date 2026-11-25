@@ -1,5 +1,5 @@
 // bump V whenever you update the game so phones pick up the new version
-const V = 'sk8erboi-v6';
+const V = 'sk8erboi-v7';
 const CORE = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'apple-touch-icon.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(V).then(c => c.addAll(CORE)).then(() => self.skipWaiting()));

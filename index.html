@@ -237,12 +237,30 @@ function partsUpdate(dt){
   for(const p of parts){ p.life += dt; if(p.k !== 'dust') p.vy += 1400*dt; p.x += p.vx*dt; p.y += p.vy*dt; }
   parts = parts.filter(p => p.life < p.max);
 }
+const CLOUDS = [
+  {y:0.20, s:0.9, par:0.10}, {y:0.33, s:0.7, par:0.16}, {y:0.27, s:1.2, par:0.12},
+  {y:0.42, s:0.6, par:0.20}, {y:0.16, s:0.8, par:0.14}
+];
+function drawCloud(x, y, s){
+  const p = (a, b) => [x + a*s, y + b*s];
+  ctx.beginPath();
+  ctx.moveTo(...p(0,0));
+  ctx.quadraticCurveTo(...p(-10,-14), ...p(12,-18));
+  ctx.quadraticCurveTo(...p(14,-40), ...p(38,-32));
+  ctx.quadraticCurveTo(...p(52,-50), ...p(66,-30));
+  ctx.quadraticCurveTo(...p(88,-30), ...p(80,0));
+  ctx.closePath(); ctx.stroke();
+}
 function drawParticles(gy){
   ctx.save(); ctx.lineWidth = 2;
-  if(state !== 'start'){
-    ctx.strokeStyle = 'rgba(43,43,43,0.08)';
-    for(let i=0;i<4;i++){ const x = (((i*263 - dist*0.8) % W) + W) % W, yy = gy - 50 - ((i*97) % 220); line(x, yy, x + speed/16, yy); }
+  // little pencil clouds drifting slowly behind everything (gives the sense of motion)
+  ctx.strokeStyle = 'rgba(43,43,43,0.35)'; ctx.lineWidth = 1.6;
+  const P = W + 260;
+  for(let i=0;i<CLOUDS.length;i++){
+    const c = CLOUDS[i], x = (((i*P/CLOUDS.length + i*37 - dist*c.par) % P) + P) % P - 130;
+    drawCloud(x, H*c.y, c.s);
   }
+  ctx.lineWidth = 2;
   for(const p of parts){
     const x = p.s ? p.x : p.x - dist;
     ctx.globalAlpha = Math.max(0, 1 - p.life/p.max); ctx.strokeStyle = p.c;
