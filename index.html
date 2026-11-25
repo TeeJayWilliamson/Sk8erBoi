@@ -240,8 +240,8 @@ function partsUpdate(dt){
 function drawParticles(gy){
   ctx.save(); ctx.lineWidth = 2;
   if(state !== 'start'){
-    ctx.strokeStyle = 'rgba(43,43,43,0.13)';
-    for(let i=0;i<8;i++){ const x = (((i*263 - dist*1.7) % W) + W) % W, yy = gy - 40 - ((i*71) % 240); line(x, yy, x + speed/9, yy); }
+    ctx.strokeStyle = 'rgba(43,43,43,0.08)';
+    for(let i=0;i<4;i++){ const x = (((i*263 - dist*0.8) % W) + W) % W, yy = gy - 50 - ((i*97) % 220); line(x, yy, x + speed/16, yy); }
   }
   for(const p of parts){
     const x = p.s ? p.x : p.x - dist;
