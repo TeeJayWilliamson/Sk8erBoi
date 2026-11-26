@@ -47,7 +47,7 @@ try { best = +localStorage.getItem('stickSkaterBest') || 0; } catch(e){}
 
 let state = 'start';   // start | run | dead
 let dist, speed, y, vy, obs, nextX, deadT, angle, score, px;
-let chain, trick, grinding, rail, popups, onGnd, lastSlope, manual, manualT;
+let chain, trick, grinding, rail, popups, onGnd, lastSlope, manual, manualT, grindT, releaseT;
 const groundY = () => Math.round(H*0.72);
 const wob = x => Math.sin(x*0.013)*2.5 + Math.sin(x*0.051)*1;
 
@@ -60,7 +60,7 @@ function reset(keepScore){
   dist = 0; speed = 340; vy = 0; y = groundY(); obs = []; nextX = W*1.1; deadT = 0; angle = 0;
   px = W < 600 ? W*0.22 : W*0.25;
   chain = []; trick = null; grinding = false; rail = null; popups = []; onGnd = true; lastSlope = 0;
-  manual = false; manualT = 0;
+  manual = false; manualT = 0; grindT = 0; releaseT = 0;
   if(!keepScore) score = 0;
 }
 function spawn(){
@@ -82,10 +82,11 @@ function spawn(){
 }
 function popup(s){ popups.push({s, t:0}); }
 const mult = () => chain.length + ((chain.some(c=>c.c==='flip') && chain.some(c=>c.c==='spin')) ? 1 : 0);
+const grindPts = () => Math.floor(grindT * MANUAL_PTS * Math.max(1, mult()));
 const manualPts = () => Math.floor(manualT * MANUAL_PTS * Math.max(1, mult()));
-const livePts = () => (chain.length ? chain.reduce((a,c)=>a+c.p,0)*mult() : 0) + manualPts();
+const livePts = () => (chain.length ? chain.reduce((a,c)=>a+c.p,0)*mult() : 0) + manualPts() + grindPts();
 function die(bounce){
-  state = 'dead'; deadT = 0; sfx('crash'); shake = 14; crashBurst(); chain = []; trick = null; grinding = false; manual = false; manualT = 0;
+  state = 'dead'; deadT = 0; sfx('crash'); shake = 14; crashBurst(); chain = []; trick = null; grinding = false; manual = false; manualT = 0; grindT = 0;
   if(bounce) vy = -320;
   best = Math.max(best, Math.floor(score));
   try { localStorage.setItem('stickSkaterBest', best); } catch(e){}
@@ -94,25 +95,30 @@ function bank(){
   const tot = livePts();
   if(tot > 0){
     const names = chain.map(c=>c.n);
+    if(grindT > 0) names.push('grind ' + grindT.toFixed(1) + 's');
     if(manualT > 0) names.push('manual ' + manualT.toFixed(1) + 's');
     score += tot; sfx('bank', tot); confetti(y-40, Math.min(40, Math.floor(10+tot/40)));
     popup(names.join(' + ') + (chain.length ? '  x' + mult() : '') + '  +' + tot);
   }
-  chain = []; trick = null; manualT = 0;
+  chain = []; trick = null; manualT = 0; grindT = 0;
 }
 function land(){
   if(trick && trick.t/DUR < 0.7){ popup('bailed!'); die(true); return false; }
   bank(); return true;
 }
+function popOut(){
+  if(state !== 'run' || !manual || !onGnd) return;
+  manual = false; vy = -JUMP - lastSlope*speed; onGnd = false; popup('pop out!'); sfx('ollie');
+}
 function jump(kind){
   audioInit();
   if(state === 'start'){ reset(false); state = 'run'; return; }
   if(state !== 'run') return;
-  if(grinding){ grinding = false; rail = null; vy = -JUMP*0.85; chain = []; trick = null; manualT = 0; return; }
+  if(grinding){ grinding = false; rail = null; vy = -JUMP*0.85; trick = null; sfx('ollie'); return; }   // line keeps going
   if(onGnd){
     vy = -JUMP - lastSlope*speed; onGnd = false; sfx('ollie');
     if(manual){ manual = false; popup('pop out!'); }          // combo stays alive
-    else { chain = []; trick = null; manualT = 0; }
+    else { chain = []; trick = null; manualT = 0; grindT = 0; }
     return;
   }
   if(!trick){
@@ -125,7 +131,7 @@ function jump(kind){
 
 // ---- input (tracks held buttons so we can detect "both held") ----
 const FK = ['Space','ArrowUp','KeyZ'], SK = ['ArrowDown','KeyX','ShiftLeft','ShiftRight'];
-const keys = new Set(), ptrs = new Map(), touch = {flip:0, spin:0}, mouse = {flip:false, spin:false};
+const keys = new Set(), ptrs = new Map(), ptrStart = new Map(), touch = {flip:0, spin:0}, mouse = {flip:false, spin:false};
 const isFlip = () => touch.flip>0 || mouse.flip || FK.some(k=>keys.has(k));
 const isSpin = () => touch.spin>0 || mouse.spin || SK.some(k=>keys.has(k));
 const isBoth = () => isFlip() && isSpin();
@@ -152,15 +158,19 @@ cv.addEventListener('pointerdown', e => {
   if(e.clientX > W-110 && e.clientY < 72){ toggleMute(); return; }
   if(e.pointerType === 'mouse'){ mouseSync(e); return; }
   const k = e.clientX > W/2 ? 'spin' : 'flip';
-  ptrs.set(e.pointerId, k); touch[k]++; jump(k);
+  ptrs.set(e.pointerId, k); ptrStart.set(e.pointerId, e.clientY); touch[k]++; jump(k);
 });
 function pointerEnd(e){
   if(e.pointerType === 'mouse'){ mouseSync(e); return; }
-  if(ptrs.has(e.pointerId)){ touch[ptrs.get(e.pointerId)]--; ptrs.delete(e.pointerId); }
+  if(ptrs.has(e.pointerId)){ touch[ptrs.get(e.pointerId)]--; ptrs.delete(e.pointerId); ptrStart.delete(e.pointerId); }
 }
 addEventListener('pointerup', pointerEnd);
 addEventListener('pointercancel', pointerEnd);
-addEventListener('pointermove', e => { if(e.pointerType === 'mouse') mouseSync(e); });
+addEventListener('pointermove', e => {
+  if(e.pointerType === 'mouse'){ mouseSync(e); return; }
+  const y0 = ptrStart.get(e.pointerId);                 // flick a held thumb upward = pop out
+  if(manual && y0 !== undefined && y0 - e.clientY > 40){ ptrStart.delete(e.pointerId); popOut(); }
+});
 cv.addEventListener('contextmenu', e => e.preventDefault());
 
 // ---- sound (all synthesized in the browser, no audio files) ----
@@ -288,12 +298,16 @@ function update(dt){
     const wx = dist + px, py = y;
     if(trick){ trick.t += dt; if(trick.t >= DUR) trick = null; }
     if(grinding){
-      y = gy - rail.h; vy = 0; score += 150*dt;
+      y = gy - rail.h; vy = 0; grindT += dt;
       if(wx > rail.x + rail.w){ grinding = false; rail = null; }
     } else {
       if(manual){
-        if(isBoth()) manualT += dt;
-        else { manual = false; bank(); }                        // released: bank the line
+        if(isBoth()){ manualT += dt; releaseT = 0; }
+        else {
+          releaseT += dt;
+          if(!isFlip() && !isSpin()) popOut();                       // lift both thumbs together: pop out, line continues
+          else if(releaseT > 0.12){ manual = false; bank(); }        // let go of just one: bank the line
+        }
       }
       if(onGnd && gndAt(wx) > y + 2){ vy = -lastSlope*speed; onGnd = false; manual = false; sfx('whoosh'); }   // ramp launch (combo carries)
       const wasAir = !onGnd;
@@ -301,7 +315,8 @@ function update(dt){
       if(vy >= 0){
         for(const o of obs){
           if(o.t==='rail' && wx >= o.x && wx <= o.x+o.w && py <= gy-o.h+4 && y >= gy-o.h){
-            if(!land()) return;
+            if(trick && trick.t/DUR < 0.7){ popup('bailed!'); die(true); return; }
+            trick = null;
             grinding = true; onGnd = false; rail = o; y = gy-o.h; vy = 0; popup('grind!'); sfx('grindon'); shake = Math.max(shake, 3);
             break;
           }
@@ -464,8 +479,9 @@ function draw(){
   ctx.fillText('best ' + best, W-20, 20);
   ctx.globalAlpha = 0.6; ctx.font = `16px ${FONT}`; ctx.fillText(muted ? 'sound: off' : 'sound: on', W-20, 46); ctx.globalAlpha = 1;
   ctx.textAlign = 'center';
-  if((chain.length || manualT > 0) && state==='run'){
+  if((chain.length || manualT > 0 || grindT > 0) && state==='run'){
     const names = chain.map(c=>c.n);
+    if(grindT > 0) names.push('grind');
     if(manualT > 0) names.push('manual');
     const n = para(names.join(' + '), W/2, 72, 22);
     fit((chain.length ? 'x' + mult() + '  =  ' : '') + livePts() + ' pts', W/2, 72 + n*26 + 4, 28);
